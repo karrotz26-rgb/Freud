@@ -29,6 +29,15 @@
     let collectibles;
     let score = 0;
     let scoreText;
+    let timerText;
+    let timeLeft = 30;
+    let spawnTimerEvent;
+    let countdownEvent;
+    let gameState = 'start'; // 'start' -> 'playing' -> 'gameover'
+    let startScreen;
+    let gameOverScreen;
+    let finalScoreText;
+    let highScoreText;
 
     // Cigar is common and cheap, book is uncommon and worth more, watch is rare
     // and worth the most - weights are relative, they don't need to sum to 100.
@@ -41,6 +50,9 @@
     const ITEM_HALF_HEIGHT = 197 * ITEM_SCALE / 2;
     const MAX_COLLECTIBLES = 6;
     const COLLECTIBLE_LIFESPAN = 6000; // ms an uncollected item stays on screen
+    const ROUND_SECONDS = 30;
+    const HIGH_SCORE_KEY = 'freudHighScores';
+    const MAX_HIGH_SCORES = 5;
 
     // Random spawn spots along the top surface of each platform, so items always
     // appear somewhere Freud can actually walk or jump up to reach.
@@ -115,6 +127,73 @@
         removeItem.call(this, item);
     }
 
+    // High scores are kept in this browser only (localStorage) - there's no
+    // server here to share a leaderboard across players.
+    function loadHighScores() {
+        try {
+            const raw = JSON.parse(localStorage.getItem(HIGH_SCORE_KEY));
+            return Array.isArray(raw) ? raw : [];
+        } catch (e) {
+            return [];
+        }
+    }
+
+    function saveHighScore(newScore) {
+        const scores = loadHighScores();
+        scores.push(newScore);
+        scores.sort((a, b) => b - a);
+        const top = scores.slice(0, MAX_HIGH_SCORES);
+        try { localStorage.setItem(HIGH_SCORE_KEY, JSON.stringify(top)); } catch (e) { /* storage unavailable, ignore */ }
+        return top;
+    }
+
+    function startGame() {
+        gameState = 'playing';
+
+        score = 0;
+        scoreText.setText('Score: 0');
+        timeLeft = ROUND_SECONDS;
+        timerText.setText('Time: ' + timeLeft);
+
+        player.setPosition(100, 450);
+        player.setVelocity(0, 0);
+
+        // Cancel any pending expiry timers before wiping leftover items from a previous round
+        collectibles.getChildren().slice().forEach(item => {
+            const t = item.getData('expireTimer');
+            if (t) t.remove(false);
+        });
+        collectibles.clear(true, true);
+
+        startScreen.setVisible(false);
+        gameOverScreen.setVisible(false);
+
+        spawnCollectible.call(this);
+        spawnTimerEvent = this.time.addEvent({ delay: 2000, callback: spawnCollectible, callbackScope: this, loop: true });
+        countdownEvent = this.time.addEvent({
+            delay: 1000, loop: true, callbackScope: this,
+            callback: () => {
+                timeLeft--;
+                timerText.setText('Time: ' + timeLeft);
+                if (timeLeft <= 0) endGame.call(this);
+            }
+        });
+    }
+
+    function endGame() {
+        gameState = 'gameover';
+
+        if (spawnTimerEvent) spawnTimerEvent.remove();
+        if (countdownEvent) countdownEvent.remove();
+
+        const scores = saveHighScore(score);
+        finalScoreText.setText('Score: ' + score);
+        highScoreText.setText(
+            'High Scores\n' + scores.map((s, i) => (i + 1) + '. ' + s).join('\n')
+        );
+        gameOverScreen.setVisible(true);
+    }
+
     function preload() {
         // Load the Victorian Library environment assets
         this.load.image('library', 'library_bg.png'); // Actual size 2400x1792, scaled to fit at draw time
@@ -142,6 +221,12 @@
         ctex.add('cigar', 0, 39, 100, 135, 197);
         ctex.add('watch', 0, 220, 100, 121, 197);
         ctex.add('book', 0, 380, 100, 169, 197);
+
+        // The auto-sliced running frame (index 2, x:214-321) had the tail end of
+        // the previous pose bleeding into its left ~25px, since the character art
+        // isn't neatly confined to the sheet's even 107px grid columns. Carve out
+        // a tighter frame that starts past the bleed.
+        this.textures.get('freud').add('run', 0, 239, 0, 82, 194);
 
         // 3. Build the platforms using the carved 'shelf' frame
         platforms = this.physics.add.staticGroup();
@@ -176,19 +261,64 @@
         cursors = this.input.keyboard.createCursorKeys();
         jumpKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
 
-        // 5. Collectibles: cigar (common, 1pt), book (uncommon, 5pts), watch (rare, 10pts)
+        // 5. Collectibles: cigar (common, 1pt), book (uncommon, 5pts), watch (rare, 10pts).
+        // Spawning/timer only start once the player clicks Start (see startGame()).
         collectibles = this.physics.add.group();
         this.physics.add.overlap(player, collectibles, collectItem, null, this);
-        this.time.addEvent({ delay: 2000, callback: spawnCollectible, callbackScope: this, loop: true });
-        spawnCollectible.call(this); // one right away instead of waiting out the first delay
 
         scoreText = this.add.text(16, 16, 'Score: 0', {
             fontSize: '24px', fontFamily: 'Georgia, serif', color: '#f5e6c8',
             stroke: '#2b1a0f', strokeThickness: 4
         }).setDepth(100);
+
+        timerText = this.add.text(784, 16, 'Time: ' + ROUND_SECONDS, {
+            fontSize: '24px', fontFamily: 'Georgia, serif', color: '#f5e6c8',
+            stroke: '#2b1a0f', strokeThickness: 4
+        }).setOrigin(1, 0).setDepth(100);
+
+        // 6. Start screen - click anywhere on the overlay to begin
+        const startOverlay = this.add.rectangle(400, 300, 800, 600, 0x000000, 0.6)
+            .setInteractive({ useHandCursor: true })
+            .on('pointerdown', () => startGame.call(this));
+        const startTitle = this.add.text(400, 230, 'Super Sigmund Bros', {
+            fontSize: '40px', fontFamily: 'Georgia, serif', color: '#f5e6c8',
+            stroke: '#2b1a0f', strokeThickness: 6
+        }).setOrigin(0.5);
+        const startPrompt = this.add.text(400, 300, 'Click to Start\n30 seconds to collect as much as you can!', {
+            fontSize: '20px', fontFamily: 'Georgia, serif', color: '#f5e6c8', align: 'center'
+        }).setOrigin(0.5);
+        startScreen = this.add.container(0, 0, [startOverlay, startTitle, startPrompt]).setDepth(200);
+
+        // 7. Game over screen - hidden until the round ends
+        const gameOverOverlay = this.add.rectangle(400, 300, 800, 600, 0x000000, 0.75)
+            .setInteractive({ useHandCursor: true })
+            .on('pointerdown', () => startGame.call(this));
+        const gameOverTitle = this.add.text(400, 190, "Time's Up!", {
+            fontSize: '36px', fontFamily: 'Georgia, serif', color: '#f5e6c8',
+            stroke: '#2b1a0f', strokeThickness: 6
+        }).setOrigin(0.5);
+        finalScoreText = this.add.text(400, 240, 'Score: 0', {
+            fontSize: '24px', fontFamily: 'Georgia, serif', color: '#f5e6c8'
+        }).setOrigin(0.5);
+        highScoreText = this.add.text(400, 340, 'High Scores', {
+            fontSize: '20px', fontFamily: 'Georgia, serif', color: '#f5e6c8', align: 'center', lineSpacing: 6
+        }).setOrigin(0.5);
+        const playAgainPrompt = this.add.text(400, 470, 'Click to Play Again', {
+            fontSize: '20px', fontFamily: 'Georgia, serif', color: '#f5e6c8'
+        }).setOrigin(0.5);
+        gameOverScreen = this.add.container(0, 0,
+            [gameOverOverlay, gameOverTitle, finalScoreText, highScoreText, playAgainPrompt]
+        ).setDepth(200).setVisible(false);
     }
 
     function update() {
+        // Freeze controls on the start/game-over screens; only let Freud fall/settle
+        if (gameState !== 'playing') {
+            player.setAccelerationX(0);
+            player.setDragX(600);
+            return;
+        }
+
         // Accelerate/decelerate instead of snapping velocity instantly, so movement feels smooth
         if (cursors.left.isDown) {
             player.setAccelerationX(-600);
@@ -202,10 +332,10 @@
         }
 
         // One static pose per state instead of a cycling animation, for maximum
-        // stability: frame 0 standing still, frame 2 running, frame 5 jumping.
-        // Facing direction (flipX) is tracked separately from pose, and only
-        // updates when there's real horizontal intent, so it doesn't reset to
-        // "facing right" every time he stops or jumps straight up.
+        // stability: frame 0 standing still, the trimmed 'run' frame running,
+        // frame 5 jumping. Facing direction (flipX) is tracked separately from
+        // pose, and only updates when there's real horizontal intent, so it
+        // doesn't reset to "facing right" every time he stops or jumps straight up.
         const vx = player.body.velocity.x;
         if (vx < -10) {
             player.setFlipX(true);
@@ -216,7 +346,7 @@
         if (!player.body.blocked.down) {
             player.setFrame(5);
         } else if (Math.abs(vx) > 10) {
-            player.setFrame(2);
+            player.setFrame('run');
         } else {
             player.setFrame(0);
         }
