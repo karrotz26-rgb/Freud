@@ -48,10 +48,18 @@
 
         // 3. Build the platforms using the carved 'shelf' frame
         platforms = this.physics.add.staticGroup();
-        // The main floor
-        platforms.create(400, 584, 'shelfSheet', 'shelf').setScale(0.4).refreshBody();
+        // The main floor - spans the full canvas width so there's no gap at the
+        // edges where the player would rest on the invisible world bound instead
+        // of the actual floor (which caused walking into it to feel like hitting a wall)
+        platforms.create(400, 584, 'shelfSheet', 'shelf').setDisplaySize(800, 52).refreshBody();
         // Floating shelves
         platforms.create(600, 400, 'shelfSheet', 'shelf').setScale(0.18).refreshBody();
+        // Stepping-stone shelf: bridges the floor to the top-left shelf, which is
+        // otherwise a ~320px drop below it, well past Freud's ~200px jump height.
+        // Approach it (and the top-left shelf after it) by running in from the
+        // side and jumping, not straight up from underneath - jumping straight
+        // up into the underside of a platform blocks the jump instead of landing.
+        platforms.create(150, 410, 'shelfSheet', 'shelf').setScale(0.18).refreshBody();
         platforms.create(50, 250, 'shelfSheet', 'shelf').setScale(0.18).refreshBody();
         platforms.create(750, 220, 'shelfSheet', 'shelf').setScale(0.18).refreshBody();
 
