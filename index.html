@@ -166,24 +166,12 @@
         player.setBounce(0);
         player.setCollideWorldBounds(true);
         player.setMaxVelocity(220, 800);
+        // The character art only fills rows 42-160 of each 194px-tall frame - the
+        // rest is transparent padding. Using the full frame as the hitbox left the
+        // body's bottom (and so his resting height) well below his actual feet,
+        // making him hover above platforms. Trim the body to the visible region.
+        player.body.setSize(107, 118).setOffset(0, 42);
         this.physics.add.collider(player, platforms);
-
-        // Simple 2-frame walk cycle (frames 1 and 3 are the two clean opposite-stride
-        // poses; frame 4 was a jarring "sprint lean" pose mixed in that made the loop
-        // look choppy). One shared animation, mirrored with flipX for left vs right,
-        // since the sheet's second row turned out to be the same right-facing pose
-        // re-colored rather than an actual mirrored walk.
-        this.anims.create({
-            key: 'walk',
-            frames: this.anims.generateFrameNumbers('freud', { frames: [1, 3] }),
-            frameRate: 6, repeat: -1
-        });
-
-        this.anims.create({
-            key: 'turn',
-            frames: [ { key: 'freud', frame: 0 } ],
-            frameRate: 20
-        });
 
         cursors = this.input.keyboard.createCursorKeys();
         jumpKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
@@ -213,19 +201,24 @@
             player.setDragX(600);
         }
 
-        // Base the facing animation on actual velocity rather than raw key state.
-        // Velocity changes smoothly frame-to-frame because of the accel/drag above,
-        // so this can't flicker between left/right the way reading the keys directly
-        // could if a keydown/keyup ever landed awkwardly between frames.
+        // One static pose per state instead of a cycling animation, for maximum
+        // stability: frame 0 standing still, frame 2 running, frame 5 jumping.
+        // Facing direction (flipX) is tracked separately from pose, and only
+        // updates when there's real horizontal intent, so it doesn't reset to
+        // "facing right" every time he stops or jumps straight up.
         const vx = player.body.velocity.x;
         if (vx < -10) {
             player.setFlipX(true);
-            player.anims.play('walk', true);
         } else if (vx > 10) {
             player.setFlipX(false);
-            player.anims.play('walk', true);
+        }
+
+        if (!player.body.blocked.down) {
+            player.setFrame(5);
+        } else if (Math.abs(vx) > 10) {
+            player.setFrame(2);
         } else {
-            player.anims.play('turn', true);
+            player.setFrame(0);
         }
 
         // Jump with Up Arrow or Space, only while standing on a platform.
