@@ -26,6 +26,81 @@
     let platforms;
     let cursors;
     let jumpKey;
+    let collectibles;
+    let score = 0;
+    let scoreText;
+
+    // Cigar is common and cheap, book is uncommon and worth more, watch is rare
+    // and worth the most - weights are relative, they don't need to sum to 100.
+    const COLLECTIBLE_TYPES = [
+        { key: 'cigar', points: 1, weight: 70 },
+        { key: 'book', points: 5, weight: 25 },
+        { key: 'watch', points: 10, weight: 5 }
+    ];
+    const ITEM_SCALE = 0.24; // ~47px tall on screen
+    const ITEM_HALF_HEIGHT = 197 * ITEM_SCALE / 2;
+    const MAX_COLLECTIBLES = 6;
+
+    // Random spawn spots along the top surface of each platform, so items always
+    // appear somewhere Freud can actually walk or jump up to reach.
+    const SPAWN_ZONES = [
+        { xMin: 20, xMax: 780, top: 558 },  // main floor
+        { xMin: 500, xMax: 700, top: 388 }, // middle-right shelf
+        { xMin: 50, xMax: 250, top: 398 },  // step shelf
+        { xMin: 5, xMax: 150, top: 238 },   // top-left shelf
+        { xMin: 650, xMax: 795, top: 208 }  // top-right shelf
+    ];
+
+    function pickCollectibleType() {
+        const totalWeight = COLLECTIBLE_TYPES.reduce((sum, t) => sum + t.weight, 0);
+        let r = Math.random() * totalWeight;
+        for (const t of COLLECTIBLE_TYPES) {
+            if (r < t.weight) return t;
+            r -= t.weight;
+        }
+        return COLLECTIBLE_TYPES[0];
+    }
+
+    function spawnCollectible() {
+        if (collectibles.countActive(true) >= MAX_COLLECTIBLES) return;
+
+        const zone = Phaser.Utils.Array.GetRandom(SPAWN_ZONES);
+        const type = pickCollectibleType();
+        const x = Phaser.Math.Between(zone.xMin, zone.xMax);
+        const y = zone.top - ITEM_HALF_HEIGHT - 6;
+
+        const item = collectibles.create(x, y, 'collectables', type.key);
+        item.body.setAllowGravity(false);
+        item.setData('points', type.points);
+
+        // Pop into the screen: grow from nothing with a little overshoot
+        item.setScale(0);
+        this.tweens.add({
+            targets: item,
+            scale: ITEM_SCALE,
+            duration: 300,
+            ease: 'Back.Out'
+        });
+    }
+
+    function collectItem(playerObj, item) {
+        if (item.getData('collected')) return; // avoid double-collecting the same frame
+        item.setData('collected', true);
+        item.body.enable = false;
+
+        score += item.getData('points');
+        scoreText.setText('Score: ' + score);
+
+        // Pop off the screen: shrink and fade, then remove
+        this.tweens.add({
+            targets: item,
+            scale: 0,
+            alpha: 0,
+            duration: 250,
+            ease: 'Back.In',
+            onComplete: () => item.destroy()
+        });
+    }
 
     function preload() {
         // Load the Victorian Library environment assets
@@ -34,6 +109,9 @@
         // wood_shelf.png is a sheet with 3 assets (plain shelf, bookshelf, book stack);
         // we only use the plain shelf region (see the frame carved out below).
         this.load.image('shelfSheet', 'wood_shelf.png');
+
+        // Collectables.png has cigar/watch/book already isolated side by side
+        this.load.image('collectables', 'Collectables.png');
 
         // Your existing Freud sprite (actual sheet is a 6-col x 2-row grid of 107x194 frames)
         this.load.spritesheet('freud', 'freud_spritesheet.png', { frameWidth: 107, frameHeight: 194 });
@@ -45,6 +123,12 @@
 
         // 2. Carve the plain-shelf region out of the uploaded sheet (x:80,y:88, 1219x129)
         this.textures.get('shelfSheet').add('shelf', 0, 80, 88, 1219, 129);
+
+        // Carve the cigar/watch/book icons out of the uploaded collectables sheet
+        const ctex = this.textures.get('collectables');
+        ctex.add('cigar', 0, 39, 100, 135, 197);
+        ctex.add('watch', 0, 220, 100, 121, 197);
+        ctex.add('book', 0, 380, 100, 169, 197);
 
         // 3. Build the platforms using the carved 'shelf' frame
         platforms = this.physics.add.staticGroup();
@@ -91,22 +175,43 @@
 
         cursors = this.input.keyboard.createCursorKeys();
         jumpKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+
+        // 5. Collectibles: cigar (common, 1pt), book (uncommon, 5pts), watch (rare, 10pts)
+        collectibles = this.physics.add.group();
+        this.physics.add.overlap(player, collectibles, collectItem, null, this);
+        this.time.addEvent({ delay: 2000, callback: spawnCollectible, callbackScope: this, loop: true });
+        spawnCollectible.call(this); // one right away instead of waiting out the first delay
+
+        scoreText = this.add.text(16, 16, 'Score: 0', {
+            fontSize: '24px', fontFamily: 'Georgia, serif', color: '#f5e6c8',
+            stroke: '#2b1a0f', strokeThickness: 4
+        }).setDepth(100);
     }
 
     function update() {
         // Accelerate/decelerate instead of snapping velocity instantly, so movement feels smooth
         if (cursors.left.isDown) {
             player.setAccelerationX(-600);
-            player.anims.play('left', true);
         }
         else if (cursors.right.isDown) {
             player.setAccelerationX(600);
-            player.anims.play('right', true);
         }
         else {
             player.setAccelerationX(0);
             player.setDragX(600);
-            player.anims.play('turn');
+        }
+
+        // Base the facing animation on actual velocity rather than raw key state.
+        // Velocity changes smoothly frame-to-frame because of the accel/drag above,
+        // so this can't flicker between left/right the way reading the keys directly
+        // could if a keydown/keyup ever landed awkwardly between frames.
+        const vx = player.body.velocity.x;
+        if (vx < -10) {
+            player.anims.play('left', true);
+        } else if (vx > 10) {
+            player.anims.play('right', true);
+        } else {
+            player.anims.play('turn', true);
         }
 
         // Jump with Up Arrow or Space, only while standing on a platform.
