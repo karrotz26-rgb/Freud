@@ -25,10 +25,15 @@
     let player;
     let platforms;
     let cursors;
+    let jumpKey;
 
     function preload() {
         // Load the Victorian Library environment assets
         this.load.image('library', 'library_bg.png'); // Actual size 2400x1792, scaled to fit at draw time
+
+        // wood_shelf.png is a sheet with 3 assets (plain shelf, bookshelf, book stack);
+        // we only use the plain shelf region (see the frame carved out below).
+        this.load.image('shelfSheet', 'wood_shelf.png');
 
         // Your existing Freud sprite (actual sheet is a 6-col x 2-row grid of 107x194 frames)
         this.load.spritesheet('freud', 'freud_spritesheet.png', { frameWidth: 107, frameHeight: 194 });
@@ -38,28 +43,24 @@
         // 1. Draw the background FIRST, scaled to fill the 800x600 screen
         this.add.image(400, 300, 'library').setDisplaySize(800, 600);
 
-        // 2. Generate a simple wood-shelf texture (no shelf image asset exists in the repo)
-        const shelfGraphics = this.make.graphics({ x: 0, y: 0, add: false });
-        shelfGraphics.fillStyle(0x8b5a2b, 1);
-        shelfGraphics.fillRect(0, 0, 200, 32);
-        shelfGraphics.fillStyle(0x6b4423, 1);
-        shelfGraphics.fillRect(0, 0, 200, 6);
-        shelfGraphics.generateTexture('shelf', 200, 32);
+        // 2. Carve the plain-shelf region out of the uploaded sheet (x:80,y:88, 1219x129)
+        this.textures.get('shelfSheet').add('shelf', 0, 80, 88, 1219, 129);
 
-        // 3. Build the platforms using the generated 'shelf' texture
+        // 3. Build the platforms using the carved 'shelf' frame
         platforms = this.physics.add.staticGroup();
         // The main floor
-        platforms.create(400, 584, 'shelf').setScale(2).refreshBody();
+        platforms.create(400, 584, 'shelfSheet', 'shelf').setScale(0.4).refreshBody();
         // Floating shelves
-        platforms.create(600, 400, 'shelf');
-        platforms.create(50, 250, 'shelf');
-        platforms.create(750, 220, 'shelf');
+        platforms.create(600, 400, 'shelfSheet', 'shelf').setScale(0.18).refreshBody();
+        platforms.create(50, 250, 'shelfSheet', 'shelf').setScale(0.18).refreshBody();
+        platforms.create(750, 220, 'shelfSheet', 'shelf').setScale(0.18).refreshBody();
 
         // 4. Spawning Freud and Animations (Kept from previous steps)
         player = this.physics.add.sprite(100, 450, 'freud');
         player.setScale(0.6); // Sprite frames are 107x194; scale down to fit the scene
-        player.setBounce(0.1);
+        player.setBounce(0);
         player.setCollideWorldBounds(true);
+        player.setMaxVelocity(220, 800);
         this.physics.add.collider(player, platforms);
 
         this.anims.create({
@@ -81,23 +82,29 @@
         });
 
         cursors = this.input.keyboard.createCursorKeys();
+        jumpKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
     }
 
     function update() {
+        // Accelerate/decelerate instead of snapping velocity instantly, so movement feels smooth
         if (cursors.left.isDown) {
-            player.setVelocityX(-200);
+            player.setAccelerationX(-600);
             player.anims.play('left', true);
-        } 
+        }
         else if (cursors.right.isDown) {
-            player.setVelocityX(200);
+            player.setAccelerationX(600);
             player.anims.play('right', true);
-        } 
+        }
         else {
-            player.setVelocityX(0);
+            player.setAccelerationX(0);
+            player.setDragX(600);
             player.anims.play('turn');
         }
 
-        if (cursors.up.isDown && player.body.touching.down) {
+        // Jump with Up Arrow or Space, only while standing on a platform.
+        // blocked.down (not touching.down) is what reliably reflects resting
+        // contact against a static body here.
+        if ((cursors.up.isDown || jumpKey.isDown) && player.body.blocked.down) {
             player.setVelocityY(-400);
         }
     }
