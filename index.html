@@ -40,6 +40,7 @@
     const ITEM_SCALE = 0.24; // ~47px tall on screen
     const ITEM_HALF_HEIGHT = 197 * ITEM_SCALE / 2;
     const MAX_COLLECTIBLES = 6;
+    const COLLECTIBLE_LIFESPAN = 6000; // ms an uncollected item stays on screen
 
     // Random spawn spots along the top surface of each platform, so items always
     // appear somewhere Freud can actually walk or jump up to reach.
@@ -81,17 +82,17 @@
             duration: 300,
             ease: 'Back.Out'
         });
+
+        // Disappear on its own after a while if nobody collects it
+        item.setData('expireTimer', this.time.delayedCall(COLLECTIBLE_LIFESPAN, () => removeItem.call(this, item)));
     }
 
-    function collectItem(playerObj, item) {
-        if (item.getData('collected')) return; // avoid double-collecting the same frame
+    // Shared pop-off (shrink + fade, then remove) used by both collection and expiry
+    function removeItem(item) {
+        if (item.getData('collected')) return; // already being removed by the other path
         item.setData('collected', true);
         item.body.enable = false;
 
-        score += item.getData('points');
-        scoreText.setText('Score: ' + score);
-
-        // Pop off the screen: shrink and fade, then remove
         this.tweens.add({
             targets: item,
             scale: 0,
@@ -100,6 +101,18 @@
             ease: 'Back.In',
             onComplete: () => item.destroy()
         });
+    }
+
+    function collectItem(playerObj, item) {
+        if (item.getData('collected')) return; // avoid double-collecting the same frame
+
+        const expireTimer = item.getData('expireTimer');
+        if (expireTimer) expireTimer.remove(false);
+
+        score += item.getData('points');
+        scoreText.setText('Score: ' + score);
+
+        removeItem.call(this, item);
     }
 
     function preload() {
@@ -155,16 +168,15 @@
         player.setMaxVelocity(220, 800);
         this.physics.add.collider(player, platforms);
 
+        // Simple 2-frame walk cycle (frames 1 and 3 are the two clean opposite-stride
+        // poses; frame 4 was a jarring "sprint lean" pose mixed in that made the loop
+        // look choppy). One shared animation, mirrored with flipX for left vs right,
+        // since the sheet's second row turned out to be the same right-facing pose
+        // re-colored rather than an actual mirrored walk.
         this.anims.create({
-            key: 'right',
-            frames: this.anims.generateFrameNumbers('freud', { start: 1, end: 4 }),
-            frameRate: 10, repeat: -1
-        });
-
-        this.anims.create({
-            key: 'left',
-            frames: this.anims.generateFrameNumbers('freud', { start: 7, end: 10 }),
-            frameRate: 10, repeat: -1
+            key: 'walk',
+            frames: this.anims.generateFrameNumbers('freud', { frames: [1, 3] }),
+            frameRate: 6, repeat: -1
         });
 
         this.anims.create({
@@ -207,9 +219,11 @@
         // could if a keydown/keyup ever landed awkwardly between frames.
         const vx = player.body.velocity.x;
         if (vx < -10) {
-            player.anims.play('left', true);
+            player.setFlipX(true);
+            player.anims.play('walk', true);
         } else if (vx > 10) {
-            player.anims.play('right', true);
+            player.setFlipX(false);
+            player.anims.play('walk', true);
         } else {
             player.anims.play('turn', true);
         }
