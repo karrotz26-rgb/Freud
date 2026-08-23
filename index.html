@@ -8,10 +8,70 @@
     <style>
         html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background-color: #222; touch-action: none; }
         #game-container { width: 100%; height: 100%; }
+
+        .share-modal {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            box-sizing: border-box;
+            touch-action: auto;
+        }
+        .share-modal.visible { display: flex; }
+        .share-modal-inner {
+            background: #2b1a0f;
+            border: 3px solid #ffde00;
+            border-radius: 10px;
+            padding: 16px;
+            max-width: 95vw;
+            max-height: 95vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
+        }
+        #share-image {
+            max-width: 90vw;
+            max-height: 65vh;
+            border-radius: 6px;
+            display: block;
+        }
+        .share-modal-buttons {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        .share-modal-buttons button {
+            font-family: Georgia, serif;
+            font-size: 16px;
+            padding: 10px 18px;
+            border-radius: 6px;
+            border: 2px solid #ffde00;
+            background: #f5e6c8;
+            color: #2b1a0f;
+            cursor: pointer;
+        }
+        .share-modal-buttons button:hover { background: #ffde00; }
     </style>
 </head>
 <body>
 <div id="game-container"></div>
+
+<div id="share-modal" class="share-modal">
+    <div class="share-modal-inner">
+        <img id="share-image" alt="Super Freud Bros high score share card">
+        <div class="share-modal-buttons">
+            <button id="share-download-btn">Save Image</button>
+            <button id="share-native-btn" style="display:none;">Share</button>
+            <button id="share-close-btn">Close</button>
+        </div>
+    </div>
+</div>
 
 <script>
     const config = {
@@ -52,6 +112,7 @@
     let gameOverScreen;
     let finalScoreText;
     let highScoreText;
+    let currentHighScores = [];
 
     // Cigar is common and cheap, book is uncommon and worth more, watch is rare
     // and worth the most - weights are relative, they don't need to sum to 100.
@@ -213,6 +274,126 @@
         return top;
     }
 
+    // Builds the shareable high-score card as a PNG data URL: library background,
+    // a Mario-style yellow block-font title, the high score in the center, Freud
+    // in the bottom-right corner and the pocket watch in the bottom-left.
+    function createShareCardDataURL(scene, highScore) {
+        const W = 1000, H = 700;
+        const canvas = document.createElement('canvas');
+        canvas.width = W;
+        canvas.height = H;
+        const ctx = canvas.getContext('2d');
+
+        const bgImg = scene.textures.get('library').getSourceImage();
+        ctx.drawImage(bgImg, 0, 0, W, H);
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+        ctx.fillRect(0, 0, W, H);
+
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'alphabetic';
+
+        // Title - yellow block font with a dark outline, Mario-logo style
+        ctx.font = 'bold 90px Impact, "Arial Black", sans-serif';
+        ctx.lineJoin = 'round';
+        ctx.lineWidth = 12;
+        ctx.strokeStyle = '#2b1a0f';
+        ctx.fillStyle = '#ffde00';
+        ctx.strokeText('SUPER FREUD BROS', W / 2, 150);
+        ctx.fillText('SUPER FREUD BROS', W / 2, 150);
+
+        // High score, centered on the card
+        ctx.font = 'bold 32px Georgia, serif';
+        ctx.lineWidth = 5;
+        ctx.fillStyle = '#f5e6c8';
+        ctx.strokeStyle = '#2b1a0f';
+        ctx.strokeText('HIGH SCORE', W / 2, H / 2 - 30);
+        ctx.fillText('HIGH SCORE', W / 2, H / 2 - 30);
+
+        ctx.font = 'bold 100px Georgia, serif';
+        ctx.lineWidth = 10;
+        ctx.fillStyle = '#ffde00';
+        ctx.strokeStyle = '#2b1a0f';
+        ctx.strokeText(String(highScore), W / 2, H / 2 + 80);
+        ctx.fillText(String(highScore), W / 2, H / 2 + 80);
+
+        // Freud, bottom-right (standing frame: the 107x194 tile at the sheet's origin)
+        const freudImg = scene.textures.get('freud').getSourceImage();
+        const fw = 107, fh = 194, fScale = 2.3;
+        const fdw = fw * fScale, fdh = fh * fScale;
+        ctx.drawImage(freudImg, 0, 0, fw, fh, W - fdw - 40, H - fdh - 20, fdw, fdh);
+
+        // Pocket watch, bottom-left (same carve region used for the in-game collectible)
+        const collImg = scene.textures.get('collectables').getSourceImage();
+        const wx = 220, wy = 100, ww = 121, wh = 197, wScale = 1.8;
+        const wdw = ww * wScale, wdh = wh * wScale;
+        ctx.drawImage(collImg, wx, wy, ww, wh, 40, H - wdh - 20, wdw, wdh);
+
+        return canvas.toDataURL('image/png');
+    }
+
+    function dataURLToBlob(dataURL) {
+        const [header, base64] = dataURL.split(',');
+        const mime = header.match(/:(.*?);/)[1];
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        return new Blob([bytes], { type: mime });
+    }
+
+    const shareModal = document.getElementById('share-modal');
+    const shareImageEl = document.getElementById('share-image');
+    const shareDownloadBtn = document.getElementById('share-download-btn');
+    const shareNativeBtn = document.getElementById('share-native-btn');
+    const shareCloseBtn = document.getElementById('share-close-btn');
+    let shareCardDataURL = null;
+
+    function showShareCard(scene, highScore) {
+        shareCardDataURL = createShareCardDataURL(scene, highScore);
+        shareImageEl.src = shareCardDataURL;
+
+        const canShareFiles = !!(navigator.canShare && window.File);
+        shareNativeBtn.style.display = canShareFiles ? 'inline-block' : 'none';
+
+        shareModal.classList.add('visible');
+    }
+
+    function hideShareCard() {
+        shareModal.classList.remove('visible');
+    }
+
+    shareDownloadBtn.addEventListener('click', () => {
+        if (!shareCardDataURL) return;
+        const a = document.createElement('a');
+        a.href = shareCardDataURL;
+        a.download = 'super-freud-bros-high-score.png';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+    });
+
+    shareNativeBtn.addEventListener('click', async () => {
+        if (!shareCardDataURL) return;
+        try {
+            const file = new File([dataURLToBlob(shareCardDataURL)], 'super-freud-bros-high-score.png', { type: 'image/png' });
+            if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                await navigator.share({ files: [file], title: 'Super Freud Bros', text: 'My high score in Super Freud Bros!' });
+            }
+        } catch (e) {
+            // User cancelled the share sheet, or sharing isn't supported here - nothing to do
+        }
+    });
+
+    shareCloseBtn.addEventListener('click', hideShareCard);
+    shareModal.addEventListener('click', (e) => {
+        if (e.target === shareModal) hideShareCard();
+    });
+
+    function goToMenu() {
+        gameState = 'start';
+        gameOverScreen.setVisible(false);
+        startScreen.setVisible(true);
+    }
+
     function startGame() {
         gameState = 'playing';
 
@@ -256,6 +437,7 @@
         if (countdownEvent) countdownEvent.remove();
 
         const scores = saveHighScore(score);
+        currentHighScores = scores;
         finalScoreText.setText('Score: ' + score);
         highScoreText.setText(
             'High Scores\n' + scores.map((s, i) => (i + 1) + '. ' + s).join('\n')
@@ -359,9 +541,7 @@
         startScreen = this.add.container(0, 0, [startOverlay, startTitle, startPrompt]).setDepth(200);
 
         // 7. Game over screen - hidden until the round ends
-        const gameOverOverlay = this.add.rectangle(400, 300, 800, 600, 0x000000, 0.75)
-            .setInteractive({ useHandCursor: true })
-            .on('pointerdown', () => startGame.call(this));
+        const gameOverOverlay = this.add.rectangle(400, 300, 800, 600, 0x000000, 0.75);
         const gameOverTitle = this.add.text(400, 190, "Time's Up!", {
             fontSize: '36px', fontFamily: 'Georgia, serif', color: '#f5e6c8',
             stroke: '#2b1a0f', strokeThickness: 6
@@ -372,11 +552,30 @@
         highScoreText = this.add.text(400, 340, 'High Scores', {
             fontSize: '20px', fontFamily: 'Georgia, serif', color: '#f5e6c8', align: 'center', lineSpacing: 6
         }).setOrigin(0.5);
-        const playAgainPrompt = this.add.text(400, 470, 'Click to Play Again', {
-            fontSize: '20px', fontFamily: 'Georgia, serif', color: '#f5e6c8'
-        }).setOrigin(0.5);
+
+        // Two post-game actions: back to the start menu, or share a card with the high score
+        const makeMenuButton = (x, y, label, onClick) => {
+            const width = 190, height = 52;
+            const bg = this.add.rectangle(0, 0, width, height, 0xf5e6c8, 0.9)
+                .setStrokeStyle(3, 0xffde00)
+                .setInteractive({ useHandCursor: true });
+            const txt = this.add.text(0, 0, label, {
+                fontSize: '18px', fontFamily: 'Georgia, serif', color: '#2b1a0f', fontStyle: 'bold'
+            }).setOrigin(0.5);
+            bg.on('pointerover', () => bg.setFillStyle(0xffde00, 1));
+            bg.on('pointerout', () => bg.setFillStyle(0xf5e6c8, 0.9));
+            bg.on('pointerdown', onClick);
+            return this.add.container(x, y, [bg, txt]);
+        };
+
+        const menuButton = makeMenuButton(295, 470, 'Main Menu', () => goToMenu());
+        const shareButton = makeMenuButton(505, 470, 'Share Score', () => {
+            const best = currentHighScores.length ? currentHighScores[0] : score;
+            showShareCard(this, best);
+        });
+
         gameOverScreen = this.add.container(0, 0,
-            [gameOverOverlay, gameOverTitle, finalScoreText, highScoreText, playAgainPrompt]
+            [gameOverOverlay, gameOverTitle, finalScoreText, highScoreText, menuButton, shareButton]
         ).setDepth(200).setVisible(false);
 
         // 8. On-screen touch controls, for phones/tablets. Sit below the start/
